@@ -19,7 +19,7 @@ from aiogram.types import (
 
 # ─────────────── НАСТРОЙКИ ───────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ДЛЯ_ЛОКАЛЬНОГО_ТЕСТА")
-ADMIN_IDS = [111111111, 222222222] # Твои ID
+ADMIN_IDS = [421440916] # Твои ID
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
