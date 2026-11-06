@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -15,7 +16,6 @@ from aiogram.types import (
     FSInputFile
 )
 
-# Берем настройки из общего файла common.py
 from common import BOT_TOKEN_FEEDBACK, LOG_CHAT_ID, PROXY_URL, log
 
 # ─────────────── ПУТИ К КАРТИНКАМ ───────────────
@@ -73,25 +73,26 @@ async def cb_cancel(cb: CallbackQuery, state: FSMContext):
     await cb.message.answer_photo(photo=IMG_FEEDBACK, caption=MAIN_TEXT, reply_markup=kb_main())
     await cb.answer("Отменено")
 
+# ─────────────── ПРИЕМ ФИДБЕКА ОТ ЮЗЕРА ───────────────
 @router.message(FBState.waiting_for_msg)
 async def process_feedback(msg: Message, state: FSMContext):
     await state.clear()
     status_msg = await msg.answer("⏳ Отправляем ваше сообщение...")
 
     try:
-        # Красиво оформляем данные отправителя
         user_link = f"<a href='tg://user?id={msg.from_user.id}'>{msg.from_user.full_name}</a>"
         username = f"@{msg.from_user.username}" if msg.from_user.username else "скрыт"
         
+        # ВАЖНО: Добавили инструкцию для админов
         header = (
             f"📩 <b>Новый FeedBack</b>\n\n"
             f"👤 <b>От:</b> {user_link}\n"
             f"🔗 <b>Юзернейм:</b> {username}\n"
             f"🆔 <b>ID:</b> <code>{msg.from_user.id}</code>\n\n"
-            f"💬 <b>Сообщение:</b>"
+            f"💬 <b>Сообщение:</b>\n"
+            f"<i>(Чтобы ответить пользователю, сделайте Reply на ЭТО сообщение)</i>"
         )
         
-        # Отправляем в группу (ID берется из common.py)
         await msg.bot.send_message(LOG_CHAT_ID, header, parse_mode="HTML")
         await msg.copy_to(chat_id=LOG_CHAT_ID)
         
@@ -105,11 +106,36 @@ async def process_feedback(msg: Message, state: FSMContext):
 
     except Exception as e:
         log.error(f"Не удалось переслать фидбек: {e}")
-        # Выводим саму ошибку, чтобы было понятно, почему не ушло
         await status_msg.edit_text(
             f"❌ <b>Ошибка:</b>\n<code>{e}</code>\n\n"
             "Проверьте, добавлен ли бот в группу."
         )
+
+# ─────────────── ОТВЕТ АДМИНА ИЗ ГРУППЫ ───────────────
+@router.message(F.chat.id == LOG_CHAT_ID, F.reply_to_message)
+async def handle_admin_reply(msg: Message):
+    # Проверяем, что админ отвечает именно на сообщение бота (карточку)
+    if msg.reply_to_message.from_user.id != msg.bot.id:
+        return
+
+    reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
+    
+    # Ищем ID пользователя в тексте карточки
+    match = re.search(r'ID:\s*<code>(-?\d+)</code>', reply_text)
+    
+    if not match:
+        # Если это ответ на само пересланное сообщение (а не на шапку), просто игнорируем
+        return
+        
+    target_user_id = int(match.group(1))
+    
+    try:
+        # Копируем ответ админа (текст, фото и т.д.) прямо в личку пользователю
+        await msg.copy_to(chat_id=target_user_id)
+        await msg.reply("✅ Ответ успешно отправлен пользователю!")
+    except Exception as e:
+        await msg.reply(f"❌ Ошибка: пользователь заблокировал бота.\n<code>{e}</code>")
+
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
