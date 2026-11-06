@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import aiosqlite
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -14,7 +15,6 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
     FSInputFile
 )
-import aiosqlite
 
 from common import BOT_TOKEN_FEEDBACK, LOG_CHAT_ID, PROXY_URL, log
 
@@ -74,25 +74,33 @@ async def cmd_start(msg: Message, state: FSMContext):
         log.error(f"Ошибка загрузки фото: {e}")
         await msg.answer(MAIN_TEXT, reply_markup=kb_main())
 
+# ─── ИСПРАВЛЕННАЯ КНОПКА НАПИСАТЬ ───
 @router.callback_query(F.data == "fb:write")
 async def cb_write(cb: CallbackQuery, state: FSMContext):
+    await cb.answer() # СРАЗУ убираем кружок загрузки
     await state.set_state(FBState.waiting_for_msg)
-    await cb.message.edit_text(
+    
+    # Удаляем сообщение с картинкой, чтобы не было ошибки edit_text
+    try: 
+        await cb.message.delete()
+    except Exception: 
+        pass
+        
+    # Отправляем новое текстовое сообщение
+    await cb.message.answer(
         "✍️ <b>Напишите ваше сообщение</b>\n\n"
         "Вы можете отправить текст, фотографию, видео или файл. Мы обязательно его прочитаем.",
         reply_markup=kb_cancel()
     )
-    await cb.answer()
 
 @router.callback_query(F.data == "fb:cancel")
 async def cb_cancel(cb: CallbackQuery, state: FSMContext):
+    await cb.answer("Отменено") # СРАЗУ убираем кружок
     await state.clear()
     try: await cb.message.delete()
     except Exception: pass
     await cb.message.answer_photo(photo=IMG_FEEDBACK, caption=MAIN_TEXT, reply_markup=kb_main())
-    await cb.answer("Отменено")
 
-# ─────────────── ПРИЕМ ФИДБЕКА ОТ ЮЗЕРА ───────────────
 @router.message(FBState.waiting_for_msg)
 async def process_feedback(msg: Message, state: FSMContext):
     await state.clear()
@@ -111,11 +119,9 @@ async def process_feedback(msg: Message, state: FSMContext):
             f"<i>(Чтобы ответить, сделайте Reply на ЭТО сообщение)</i>"
         )
         
-        # Сохраняем в БД шапку
         header_msg = await msg.bot.send_message(LOG_CHAT_ID, header, parse_mode="HTML")
         await save_link(header_msg.message_id, msg.from_user.id)
         
-        # Сохраняем в БД само скопированное сообщение
         copied_msg = await msg.copy_to(chat_id=LOG_CHAT_ID)
         await save_link(copied_msg.message_id, msg.from_user.id)
         
@@ -134,26 +140,30 @@ async def process_feedback(msg: Message, state: FSMContext):
 # ─────────────── ОТВЕТ АДМИНА ИЗ ГРУППЫ ───────────────
 @router.message(F.chat.id == LOG_CHAT_ID, F.reply_to_message)
 async def handle_admin_reply(msg: Message):
-    log.info(f"Поймал сообщение в группе. Reply на msg_id: {msg.reply_to_message.message_id}")
+    log.info(f"✅ БОТ УВИДЕЛ REPLY НА СООБЩЕНИЕ ID: {msg.reply_to_message.message_id}")
     
-    # Ищем ID пользователя в базе, на чье сообщение ответил админ
     target_user_id = await get_user_id(msg.reply_to_message.message_id)
     
     if not target_user_id:
-        # Если это не наш фидбек, просто игнорируем
+        log.warning(f"⚠️ В базе нет юзера для msg_id {msg.reply_to_message.message_id}")
         return
         
     try:
         await msg.copy_to(chat_id=target_user_id)
         await msg.reply("✅ Ответ успешно отправлен пользователю!")
-        log.info(f"Ответ отправлен юзеру {target_user_id}")
+        log.info(f"✅ Ответ доставлен юзеру {target_user_id}")
     except Exception as e:
         await msg.reply(f"❌ Ошибка: пользователь заблокировал бота.\n<code>{e}</code>")
         log.error(f"Ошибка отправки юзеру {target_user_id}: {e}")
 
+# ─────────────── ОТЛАДКА (ШПИОН) ───────────────
+@router.message(F.chat.id == LOG_CHAT_ID)
+async def debug_group_messages(msg: Message):
+    log.info(f"ГРУППА: Получено сообщение от {msg.from_user.id}. Текст: '{msg.text}'. Это реплай? {bool(msg.reply_to_message)}")
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
-    await init_fb_db() # Инициализация базы фидбека
+    await init_fb_db()
     
     session = AiohttpSession(proxy=PROXY_URL) if PROXY_URL else AiohttpSession()
     bot = Bot(token=BOT_TOKEN_FEEDBACK, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
