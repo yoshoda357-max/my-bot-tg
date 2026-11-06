@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -15,16 +15,8 @@ from aiogram.types import (
     FSInputFile
 )
 
-# ═══════════════════ НАСТРОЙКИ ═══════════════════
-# Токен будет браться из панели Bothost, либо из текста ниже
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ТОКЕН_БОТА_ФИДБЕКА_СЮДА")
-
-# ID группы, КУДА БУДУТ ПРИХОДИТЬ ФИДБЕКИ (например: -1001234567890)
-# Обязательно добавь этого бота в ту группу!
-FEEDBACK_GROUP_ID = -1001234567890 
-
-# Прокси на Bothost не нужен
-PROXY_URL = None 
+# Берем настройки из общего файла common.py
+from common import BOT_TOKEN_FEEDBACK, LOG_CHAT_ID, PROXY_URL, log
 
 # ─────────────── ПУТИ К КАРТИНКАМ ───────────────
 DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
@@ -32,15 +24,11 @@ IMG_DIR = os.path.join(DATA_DIR, "images")
 os.makedirs(IMG_DIR, exist_ok=True)
 IMG_FEEDBACK = FSInputFile(os.path.join(IMG_DIR, "feedback.jpg"))
 
-log = logging.getLogger("feedback_bot")
-
-# ─────────────── СОСТОЯНИЯ ───────────────
 class FBState(StatesGroup):
     waiting_for_msg = State()
 
 router = Router()
 
-# ─────────────── КЛАВИАТУРЫ ───────────────
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 FeedBack", callback_data="fb:write")]
@@ -51,7 +39,6 @@ def kb_cancel() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="✖️ Отменить", callback_data="fb:cancel")]
     ])
 
-# ─────────────── ТЕКСТЫ ───────────────
 MAIN_TEXT = (
     "👋 <b>Добро пожаловать!</b>\n\n"
     "Это официальный бот для связи с проектом <b>Veperp</b>.\n\n"
@@ -59,18 +46,12 @@ MAIN_TEXT = (
     "Нажмите кнопку ниже, чтобы написать нам. 👇"
 )
 
-# ─────────────── ХЕНДЛЕРЫ ───────────────
 @router.message(CommandStart())
 async def cmd_start(msg: Message, state: FSMContext):
     await state.clear()
     try:
-        await msg.answer_photo(
-            photo=IMG_FEEDBACK, 
-            caption=MAIN_TEXT, 
-            reply_markup=kb_main()
-        )
+        await msg.answer_photo(photo=IMG_FEEDBACK, caption=MAIN_TEXT, reply_markup=kb_main())
     except Exception as e:
-        # Если картинки нет, шлем просто текст
         log.error(f"Ошибка загрузки фото: {e}")
         await msg.answer(MAIN_TEXT, reply_markup=kb_main())
 
@@ -79,8 +60,7 @@ async def cb_write(cb: CallbackQuery, state: FSMContext):
     await state.set_state(FBState.waiting_for_msg)
     await cb.message.edit_text(
         "✍️ <b>Напишите ваше сообщение</b>\n\n"
-        "Вы можете отправить текст, фотографию, видео или файл. "
-        "Мы обязательно его прочитаем.",
+        "Вы можете отправить текст, фотографию, видео или файл. Мы обязательно его прочитаем.",
         reply_markup=kb_cancel()
     )
     await cb.answer()
@@ -88,70 +68,53 @@ async def cb_write(cb: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "fb:cancel")
 async def cb_cancel(cb: CallbackQuery, state: FSMContext):
     await state.clear()
-    try:
-        await cb.message.delete()
-    except Exception:
-        pass
-    await cb.message.answer_photo(
-        photo=IMG_FEEDBACK, 
-        caption=MAIN_TEXT, 
-        reply_markup=kb_main()
-    )
+    try: await cb.message.delete()
+    except Exception: pass
+    await cb.message.answer_photo(photo=IMG_FEEDBACK, caption=MAIN_TEXT, reply_markup=kb_main())
     await cb.answer("Отменено")
 
 @router.message(FBState.waiting_for_msg)
 async def process_feedback(msg: Message, state: FSMContext):
-    # Меняем состояние, чтобы не спамил
     await state.clear()
-    
-    # Показываем пользователю, что сообщение отправляется
     status_msg = await msg.answer("⏳ Отправляем ваше сообщение...")
 
     try:
-        # Формируем шапку для админов в группе
+        # Красиво оформляем данные отправителя
         user_link = f"<a href='tg://user?id={msg.from_user.id}'>{msg.from_user.full_name}</a>"
-        username = f"@{msg.from_user.username}" if msg.from_user.username else "—"
+        username = f"@{msg.from_user.username}" if msg.from_user.username else "скрыт"
         
         header = (
             f"📩 <b>Новый FeedBack</b>\n\n"
-            f"От: {user_link}\n"
-            f"Username: {username}\n"
-            f"ID: <code>{msg.from_user.id}</code>\n\n"
-            f"<b>Сообщение:</b>"
+            f"👤 <b>От:</b> {user_link}\n"
+            f"🔗 <b>Юзернейм:</b> {username}\n"
+            f"🆔 <b>ID:</b> <code>{msg.from_user.id}</code>\n\n"
+            f"💬 <b>Сообщение:</b>"
         )
         
-        # Отправляем шапку в группу
-        await msg.bot.send_message(FEEDBACK_GROUP_ID, header, parse_mode="HTML")
+        # Отправляем в группу (ID берется из common.py)
+        await msg.bot.send_message(LOG_CHAT_ID, header, parse_mode="HTML")
+        await msg.copy_to(chat_id=LOG_CHAT_ID)
         
-        # Копируем само сообщение (текст/фото/видео) в группу
-        await msg.copy_to(chat_id=FEEDBACK_GROUP_ID)
-        
-        # Меняем сообщение пользователю
         await status_msg.edit_text(
             "✅ <b>Сообщение успешно отправлено!</b>\n\n"
             "Спасибо за ваш отзыв. Команда проекта Veperp свяжется с вами, если это потребуется."
         )
         
-        # (Опционально) Возвращаем кнопку в меню через пару секунд
         await asyncio.sleep(2)
         await msg.answer("Вы можете отправить еще одно сообщение или вернуться в меню:", reply_markup=kb_main())
 
     except Exception as e:
         log.error(f"Не удалось переслать фидбек: {e}")
+        # Выводим саму ошибку, чтобы было понятно, почему не ушло
         await status_msg.edit_text(
-            "❌ <b>Произошла ошибка при отправке.</b>\n\n"
-            "Пожалуйста, попробуйте позже или напишите администратору напрямую."
+            f"❌ <b>Ошибка:</b>\n<code>{e}</code>\n\n"
+            "Проверьте, добавлен ли бот в группу."
         )
 
-# ─────────────── ТОЧКА ВХОДА ───────────────
 async def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
-    )
-    
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
     session = AiohttpSession(proxy=PROXY_URL) if PROXY_URL else AiohttpSession()
-    bot = Bot(token=BOT_TOKEN, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot = Bot(token=BOT_TOKEN_FEEDBACK, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
 
