@@ -1,19 +1,24 @@
 import logging
 import os
 
-BOT_TOKEN_MAIN    = "9239174576:AAEuC_gqOaBqX-6c6Msa2uh31VQcr30zhE0"
-BOT_TOKEN_CASHIER = "9186020712:AAEKwnus1kf8krF6cavv183VqwFD_ffjFng"
+# ═══════════════════ НАСТРОЙКИ ═══════════════════
+# Код берет токен из настроек хостинга (Bot Token), 
+# а если его нет — берет из текста ниже
+BOT_TOKEN_MAIN    = os.getenv("BOT_TOKEN", "ТОКЕН_ОСНОВНОГО_БОТА_СЮДА")
+BOT_TOKEN_CASHIER = os.getenv("BOT_TOKEN", "ТОКЕН_КАССИРА_СЮДА")
 
 CASHIER_USERNAME  = "VeperpCashierBot"  # без @, из @BotFather
 CASHIER_URL       = f"https://t.me/VeperpCashierBot"
 
 LOG_CHAT_ID       = -1003943716174     # ID общей лог-группы
 ADMIN_IDS         = [421440916] # два админа
+
 PROXY_URL         = None
 
 CHANNEL_URL       = "https://t.me/+G25SaUOrcUUxMDMy"
 PRICE_STARS       = 800
 DONATE_STARS      = 1
+
 
 log = logging.getLogger("postman")
 
