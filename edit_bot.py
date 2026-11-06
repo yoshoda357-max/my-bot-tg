@@ -18,12 +18,16 @@ from aiogram.types import (
 )
 
 # ─────────────── НАСТРОЙКИ ───────────────
+# Токен берется из панели Bothost (переменная BOT_TOKEN)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ДЛЯ_ЛОКАЛЬНОГО_ТЕСТА")
-ADMIN_IDS = [421440916] # ЗАМЕНИ НА СВОЙ ID
+
+# ВПИШИ СЮДА СВОИ ID (без кавычек)
+ADMIN_IDS = [421440916] 
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
 
+# ─────────────── ПУТИ ДЛЯ BOTHOST ───────────────
 DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
 IMG_DIR = os.path.join(DATA_DIR, "images")
 os.makedirs(IMG_DIR, exist_ok=True)
@@ -35,12 +39,14 @@ class EditStates(StatesGroup):
     waiting_link = State()
     waiting_template = State()
 
+# ═══════════════ 3 ШАБЛОНА ═══════════════
 TEMPLATES = {
     "1": {"text": "coc mef and more drugs only here", "img": "img1.jpg"},
     "2": {"text": "best narcoshop", "img": "img2.jpg"},
     "3": {"text": "buy drugs only here", "img": "img3.jpg"}
 }
 
+# ═══════════════ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ═══════════════
 def get_channels():
     if os.path.exists(CHANNELS_FILE):
         try:
@@ -54,7 +60,9 @@ def kb_channels():
     channels = get_channels()
     keyboard = []
     for i, ch in enumerate(channels):
-        keyboard.append([InlineKeyboardButton(text=ch, callback_data=f"chan:{i}")])
+        # Обрезаем название кнопки, если ссылка слишком длинная
+        btn_text = ch if len(ch) < 30 else ch[:27] + "..."
+        keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"chan:{i}")])
     
     if not keyboard:
         keyboard.append([InlineKeyboardButton(text="❌ Нет каналов в JSON", callback_data="none")])
@@ -69,6 +77,7 @@ def kb_templates():
         [InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel")]
     ])
 
+# ═══════════════ ХЕНДЛЕРЫ ═══════════════
 @router.message(CommandStart())
 async def cmd_start(msg: Message, state: FSMContext):
     if msg.from_user.id not in ADMIN_IDS:
@@ -161,22 +170,25 @@ async def process_template(cb: CallbackQuery, state: FSMContext):
     status_msg = await cb.message.edit_text("⏳ Пытаюсь отредактировать сообщение...")
 
     try:
-        # ПЫТАЕМСЯ ОТРЕДАКТИРОВАТЬ (Сработает, если сообщение было с фото)
+        # Пытаемся заменить и фото, и текст (с сохранением ID)
         await cb.bot.edit_message_media(
             chat_id=chat_id,
             message_id=message_id,
-            media=InputMediaPhoto(media=photo, caption=final_text),
-            parse_mode="HTML"
+            media=InputMediaPhoto(
+                media=photo, 
+                caption=final_text,
+                parse_mode="HTML"
+            )
         )
-        await status_msg.edit_text("✅ <b>Успешно! Сообщение отредактировано.</b>")
+        await status_msg.edit_text("✅ <b>Успешно! Сообщение отредактировано (ID сохранился).</b>")
         
     except Exception as e:
-        # ЕСЛИ ОШИБКА, ПОКАЗЫВАЕМ ЕЁ ТЕБЕ
+        # Если не вышло (например, старое сообщение было текстом)
         error_text = str(e)
         await status_msg.edit_text(
             f"⚠️ <b>Telegram запретил редактирование!</b>\n\n"
             f"Текст ошибки:\n<code>{error_text}</code>\n\n"
-            f"<i>Пробую удалить старое и отправить новое...</i>"
+            f"<i>Удаляю старое и отправляю новое...</i>"
         )
         
         try:
