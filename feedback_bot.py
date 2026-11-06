@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import re
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -15,19 +14,39 @@ from aiogram.types import (
     CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message,
     FSInputFile
 )
+import aiosqlite
 
 from common import BOT_TOKEN_FEEDBACK, LOG_CHAT_ID, PROXY_URL, log
 
-# ─────────────── ПУТИ К КАРТИНКАМ ───────────────
 DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
 IMG_DIR = os.path.join(DATA_DIR, "images")
 os.makedirs(IMG_DIR, exist_ok=True)
 IMG_FEEDBACK = FSInputFile(os.path.join(IMG_DIR, "feedback.jpg"))
 
+DB_PATH = os.path.join(DATA_DIR, "feedback.db")
+
 class FBState(StatesGroup):
     waiting_for_msg = State()
 
 router = Router()
+
+async def init_fb_db():
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""CREATE TABLE IF NOT EXISTS fb_links(
+            group_msg_id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL)""")
+        await db.commit()
+
+async def save_link(group_msg_id: int, user_id: int):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT OR REPLACE INTO fb_links(group_msg_id, user_id) VALUES(?,?)", (group_msg_id, user_id))
+        await db.commit()
+
+async def get_user_id(group_msg_id: int) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT user_id FROM fb_links WHERE group_msg_id=?", (group_msg_id,))
+        row = await cur.fetchone()
+        return row[0] if row else None
 
 def kb_main() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -83,22 +102,26 @@ async def process_feedback(msg: Message, state: FSMContext):
         user_link = f"<a href='tg://user?id={msg.from_user.id}'>{msg.from_user.full_name}</a>"
         username = f"@{msg.from_user.username}" if msg.from_user.username else "скрыт"
         
-        # ВАЖНО: Добавили инструкцию для админов
         header = (
             f"📩 <b>Новый FeedBack</b>\n\n"
             f"👤 <b>От:</b> {user_link}\n"
             f"🔗 <b>Юзернейм:</b> {username}\n"
             f"🆔 <b>ID:</b> <code>{msg.from_user.id}</code>\n\n"
             f"💬 <b>Сообщение:</b>\n"
-            f"<i>(Чтобы ответить пользователю, сделайте Reply на ЭТО сообщение)</i>"
+            f"<i>(Чтобы ответить, сделайте Reply на ЭТО сообщение)</i>"
         )
         
-        await msg.bot.send_message(LOG_CHAT_ID, header, parse_mode="HTML")
-        await msg.copy_to(chat_id=LOG_CHAT_ID)
+        # Сохраняем в БД шапку
+        header_msg = await msg.bot.send_message(LOG_CHAT_ID, header, parse_mode="HTML")
+        await save_link(header_msg.message_id, msg.from_user.id)
+        
+        # Сохраняем в БД само скопированное сообщение
+        copied_msg = await msg.copy_to(chat_id=LOG_CHAT_ID)
+        await save_link(copied_msg.message_id, msg.from_user.id)
         
         await status_msg.edit_text(
             "✅ <b>Сообщение успешно отправлено!</b>\n\n"
-            "Спасибо за ваш отзыв. Команда проекта Veperp свяжется с вами, если это потребуется."
+            "Спасибо за ваш отзыв. Команда проекта Veperp свяжется с вами."
         )
         
         await asyncio.sleep(2)
@@ -106,39 +129,32 @@ async def process_feedback(msg: Message, state: FSMContext):
 
     except Exception as e:
         log.error(f"Не удалось переслать фидбек: {e}")
-        await status_msg.edit_text(
-            f"❌ <b>Ошибка:</b>\n<code>{e}</code>\n\n"
-            "Проверьте, добавлен ли бот в группу."
-        )
+        await status_msg.edit_text(f"❌ <b>Ошибка:</b>\n<code>{e}</code>")
 
 # ─────────────── ОТВЕТ АДМИНА ИЗ ГРУППЫ ───────────────
 @router.message(F.chat.id == LOG_CHAT_ID, F.reply_to_message)
 async def handle_admin_reply(msg: Message):
-    # Проверяем, что админ отвечает именно на сообщение бота (карточку)
-    if msg.reply_to_message.from_user.id != msg.bot.id:
-        return
-
-    reply_text = msg.reply_to_message.text or msg.reply_to_message.caption or ""
+    log.info(f"Поймал сообщение в группе. Reply на msg_id: {msg.reply_to_message.message_id}")
     
-    # Ищем ID пользователя в тексте карточки
-    match = re.search(r'ID:\s*<code>(-?\d+)</code>', reply_text)
+    # Ищем ID пользователя в базе, на чье сообщение ответил админ
+    target_user_id = await get_user_id(msg.reply_to_message.message_id)
     
-    if not match:
-        # Если это ответ на само пересланное сообщение (а не на шапку), просто игнорируем
+    if not target_user_id:
+        # Если это не наш фидбек, просто игнорируем
         return
         
-    target_user_id = int(match.group(1))
-    
     try:
-        # Копируем ответ админа (текст, фото и т.д.) прямо в личку пользователю
         await msg.copy_to(chat_id=target_user_id)
         await msg.reply("✅ Ответ успешно отправлен пользователю!")
+        log.info(f"Ответ отправлен юзеру {target_user_id}")
     except Exception as e:
         await msg.reply(f"❌ Ошибка: пользователь заблокировал бота.\n<code>{e}</code>")
-
+        log.error(f"Ошибка отправки юзеру {target_user_id}: {e}")
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s")
+    await init_fb_db() # Инициализация базы фидбека
+    
     session = AiohttpSession(proxy=PROXY_URL) if PROXY_URL else AiohttpSession()
     bot = Bot(token=BOT_TOKEN_FEEDBACK, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dp = Dispatcher(storage=MemoryStorage())
