@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import random
+import time
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -38,10 +39,8 @@ CHANNELS_FILE = os.path.join(DATA_DIR, "channels.json")
 router = Router()
 
 class EditStates(StatesGroup):
-    # Для режима 1
     m1_waiting_link = State()
     m1_waiting_template = State()
-    # Для режима 2
     m2_waiting_nick = State()
 
 TEMPLATES = {
@@ -103,6 +102,9 @@ def kb_user_subscribe():
 # ═══════════════ СТАРТ ═══════════════
 @router.message(CommandStart())
 async def cmd_start(msg: Message, state: FSMContext):
+    # ЭТА СТРОЧКА ПОМОЖЕТ ПОНЯТЬ, ЧТО КОД ОБНОВИЛСЯ
+    print(f"[{time.ctime()}] БОТ ЗАПУЩЕН С НОВЫМ КОДОМ (РЕЖИМ 1 И 2)!")
+    
     if msg.from_user.id not in ADMIN_IDS:
         bonus_text = (
             "🎉 <b>Поздравляю!</b>\n\n"
@@ -158,7 +160,7 @@ async def cb_user_check_sub(cb: CallbackQuery):
         await cb.answer("❌ Ошибка проверки. Подпишитесь и попробуйте снова.", show_alert=True)
     await cb.answer()
 
-# ═══════════════ АДМИН: ВЫБОР РЕЖИМА ═══════════════
+# ═══════════════ АДМИН: РЕЖИМЫ ═══════════════
 @router.callback_query(F.data.startswith("mode:"))
 async def cb_choose_mode(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -174,7 +176,6 @@ async def cb_choose_mode(cb: CallbackQuery, state: FSMContext):
     )
     await cb.answer()
 
-# ═══════════════ ВЫБОР КАНАЛА ═══════════════
 @router.callback_query(F.data.startswith("chan1:") | F.data.startswith("chan2:"))
 async def cb_channel(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
@@ -206,7 +207,7 @@ async def cb_channel(cb: CallbackQuery, state: FSMContext):
         )
     await cb.answer()
 
-# ═══════════════ РЕЖИМ 1: ФОТО + ТЕКСТ ═══════════════
+# ═══════════════ РЕЖИМ 1: ЗАМЕНА ПОСТА ═══════════════
 @router.message(EditStates.m1_waiting_link)
 async def m1_process_link(msg: Message, state: FSMContext):
     if msg.from_user.id not in ADMIN_IDS: return
@@ -269,12 +270,11 @@ async def m2_process_nick_and_send(msg: Message, state: FSMContext):
     
     nickname = msg.text
     data = await state.get_data()
-    chat_id = data.get("chat_id") # Сюда бот сохранил канал из списка на предыдущем шаге
+    chat_id = data.get("chat_id") 
     
     await state.clear()
     status_msg = await msg.answer(f"⏳ Отправляю игру в канал {chat_id}...")
 
-    # Логика генерации
     game_mode = random.choice(["Чётное", "Нечётное"])
     dollars = random.randint(1, 5)
     cents = random.randint(10, 99)
@@ -288,10 +288,8 @@ async def m2_process_nick_and_send(msg: Message, state: FSMContext):
     )
 
     try:
-        # Сразу отправляем текст и кубик в канал
         await msg.bot.send_message(chat_id=chat_id, text=game_text, parse_mode="HTML", disable_web_page_preview=True)
         await msg.bot.send_dice(chat_id=chat_id, emoji="🎲")
-        
         await status_msg.edit_text(f"✅ <b>Игра успешно отправлена в {chat_id}!</b>")
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка: {e}")
@@ -311,7 +309,7 @@ async def main() -> None:
     dp.include_router(router)
 
     log = logging.getLogger("edit_bot")
-    log.info("Бот-редактор (2 режима + заглушка) запущен")
+    log.info("Бот-редактор (2 режима) запущен")
     try:
         await dp.start_polling(bot)
     finally:
