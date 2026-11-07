@@ -10,7 +10,7 @@ import time
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -21,23 +21,25 @@ from aiogram.types import (
 
 # ─────────────── НАСТРОЙКИ ───────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ДЛЯ_ЛОКАЛЬНОГО_ТЕСТА")
-ADMIN_IDS = [421440916] # ЗАМЕНИ НА СВОЙ ID (без кавычек)
+ADMIN_IDS = [421440916] # ЗАМЕНИ НА СВОЙ ID
 
-# НАСТРОЙКИ ДЛЯ ЮЗЕРОВ (ЗАГЛУШКА)
-CHECK_CHANNEL_ID = "@duckduckcasino" # Юзернейм канала для проверки подписки
+CHECK_CHANNEL_ID = "@duckduckcasino" 
 CHECK_CHANNEL_URL = "https://t.me/duckduckcasino" 
 CASINO_BOT_URL = "https://t.me/duckduckcasinobot" 
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
 
-# ─────────────── ПУТИ ДЛЯ BOTHOST ───────────────
 DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
 IMG_DIR = os.path.join(DATA_DIR, "images")
 os.makedirs(IMG_DIR, exist_ok=True)
 CHANNELS_FILE = os.path.join(DATA_DIR, "channels.json")
 
 router = Router()
+
+# ─────────────── СПИСКИ ДЛЯ АВТО-РЕЖИМА ───────────────
+AUTO_NICKNAMES = ["BetMaster", "Jerry", "John", "AlexQ", "Joker", "Angel777", "FiveFingers", "p0tato", "ludoMAN"]
+auto_task = None # Сюда мы сохраним запущенный цикл, чтобы можно было его остановить
 
 class EditStates(StatesGroup):
     m1_waiting_link = State()
@@ -63,7 +65,8 @@ def get_channels():
 def kb_main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📸 Режим 1: Замена поста", callback_data="mode:1")],
-        [InlineKeyboardButton(text="🎲 Режим 2: Отправить Мини-игру", callback_data="mode:2")]
+        [InlineKeyboardButton(text="🎲 Режим 2: Отправить Мини-игру", callback_data="mode:2")],
+        [InlineKeyboardButton(text="🤖 Режим 3: Авто-игра (каждые 5 мин)", callback_data="mode:3")]
     ])
 
 def kb_channels(action_prefix):
@@ -100,19 +103,63 @@ def kb_user_subscribe():
         [InlineKeyboardButton(text="✅ Проверить подписку", callback_data="user_check_sub")]
     ])
 
+# ═══════════════ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ИГРЫ ═══════════════
+async def send_game_to_channel(bot: Bot, chat_id: str, nickname: str):
+    """Отправляет ставку, кубик и результат в канал"""
+    game_mode = random.choice(["Чётное", "Нечётное"])
+    dollars = random.randint(1, 5)
+    cents = random.randint(10, 99)
+    
+    bet_value = dollars + (cents / 100.0)
+    bet_amount_str = f"${dollars}.{cents:02d}"
+    
+    game_text = (
+        f"🎉 <b>Ваша ставка принята</b>\n"
+        f"🔑 Игрок: {nickname} (https://t.me/duckduckcasinobot)\n"
+        f"🚀 Режим: {game_mode}\n"
+        f"💸 Ставка: {bet_amount_str}"
+    )
+
+    await bot.send_message(chat_id=chat_id, text=game_text, parse_mode="HTML", disable_web_page_preview=True)
+    
+    dice_msg = await bot.send_dice(chat_id=chat_id, emoji="🎲")
+    dice_value = dice_msg.dice.value 
+    
+    await asyncio.sleep(4) # Ждем, пока кубик крутится
+
+    is_even = (dice_value % 2 == 0)
+    
+    if (game_mode == "Чётное" and is_even) or (game_mode == "Нечётное" and not is_even):
+        win_value = bet_value * 1.5
+        win_amount_str = f"${win_value:.2f}"
+        result_text = (
+            f"🎲 Выпало число: <b>{dice_value}</b>\n\n"
+            f"🎉 <b>ПОБЕДА!</b> 🏆\n\n"
+            f"🔑 Игрок: <b>{nickname}</b>\n"
+            f"💰 Выигрыш: <b>{win_amount_str}</b> (x1.5)\n"
+            f"💸 Ваша ставка: {bet_amount_str}"
+        )
+    else:
+        result_text = (
+            f"🎲 Выпало число: <b>{dice_value}</b>\n\n"
+            f"😢 <b>ПОРАЖЕНИЕ.</b> 💔\n\n"
+            f"🔑 Игрок: <b>{nickname}</b>\n"
+            f"💸 Вы проиграли: <b>{bet_amount_str}</b>\n"
+            f"📉 Лимит исчерпан."
+        )
+    await bot.send_message(chat_id=chat_id, text=result_text, parse_mode="HTML")
+    return dice_value, nickname
+
 # ═══════════════ СТАРТ ═══════════════
 @router.message(CommandStart())
 async def cmd_start(msg: Message, state: FSMContext):
-    # Отладочный вывод для проверки обновления на хостинге
-    print(f"[{time.ctime()}] БОТ ЗАПУЩЕН С НОВЫМ КОДОМ!")
-    
     if msg.from_user.id not in ADMIN_IDS:
         bonus_text = (
             "🎉 <b>Поздравляю!</b>\n\n"
             "Вы получили 3$ (187⭐️) бонусного баланса!"
         )
         try:
-            photo = FSInputFile(os.path.join(IMG_DIR, "free.jpg"))
+            photo = FSInputFile(os.path.join(IMG_DIR, "main.jpg"))
             await msg.answer_photo(photo=photo, caption=bonus_text, reply_markup=kb_user_start())
         except Exception:
             await msg.answer(bonus_text, reply_markup=kb_user_start())
@@ -121,9 +168,21 @@ async def cmd_start(msg: Message, state: FSMContext):
     await state.clear()
     await msg.answer(
         "🛠 <b>Панель управления каналами</b>\n\n"
-        "Выберите режим работы:",
+        "Выберите режим работы:\n"
+        "<i>(Для остановки авто-режима напишите /stop)</i>",
         reply_markup=kb_main_menu()
     )
+
+@router.message(Command("stop"))
+async def cmd_stop_auto(msg: Message):
+    global auto_task
+    if msg.from_user.id not in ADMIN_IDS: return
+    if auto_task and not auto_task.done():
+        auto_task.cancel()
+        auto_task = None
+        await msg.answer("🛑 <b>Автоматическая рассылка остановлена.</b>")
+    else:
+        await msg.answer("ℹ️ Авто-режим и так не запущен.")
 
 # ═══════════════ ЗАГЛУШКА ДЛЯ ЮЗЕРОВ ═══════════════
 @router.callback_query(F.data == "user_bet")
@@ -168,7 +227,7 @@ async def cb_choose_mode(cb: CallbackQuery, state: FSMContext):
     
     mode = cb.data.split(":")[1]
     await state.update_data(mode=mode)
-    action_prefix = "chan1" if mode == "1" else "chan2"
+    action_prefix = f"chan{mode}"
     
     await cb.message.edit_text(
         f"📌 <b>Режим {mode}</b>\n\n"
@@ -177,7 +236,8 @@ async def cb_choose_mode(cb: CallbackQuery, state: FSMContext):
     )
     await cb.answer()
 
-@router.callback_query(F.data.startswith("chan1:") | F.data.startswith("chan2:"))
+# ═══════════════ ВЫБОР КАНАЛА ДЛЯ ВСЕХ РЕЖИМОВ ═══════════════
+@router.callback_query(F.data.startswith("chan1:") | F.data.startswith("chan2:") | F.data.startswith("chan3:"))
 async def cb_channel(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
 
@@ -189,57 +249,63 @@ async def cb_channel(cb: CallbackQuery, state: FSMContext):
         return await cb.answer("Ошибка: канал не найден", show_alert=True)
         
     channel = channels[idx]
-    await state.update_data(chat_id=channel)
     
+    # РЕЖИМ 1 (Замена поста)
     if action == "chan1":
+        await state.update_data(chat_id=channel)
         await state.set_state(EditStates.m1_waiting_link)
-        await cb.message.edit_text(
-            f"📌 Канал: <b>{channel}</b>\n\n"
-            "Отправьте ссылку на <b>сообщение</b> (например: <code>https://t.me/c/123456789/12</code>):",
-            reply_markup=kb_cancel()
-        )
-    else:
+        await cb.message.edit_text(f"📌 Канал: <b>{channel}</b>\n\nОтправьте ссылку на сообщение:", reply_markup=kb_cancel())
+    
+    # РЕЖИМ 2 (Ручная игра)
+    elif action == "chan2":
+        await state.update_data(chat_id=channel)
         await state.set_state(EditStates.m2_waiting_nick)
-        await cb.message.edit_text(
-            f"📌 Канал: <b>{channel}</b>\n\n"
-            "🎰 <b>Мини-игра</b>\n"
-            "Введите любой никнейм игрока (например, <code>тимур</code>):",
-            reply_markup=kb_cancel()
-        )
+        await cb.message.edit_text(f"📌 Канал: <b>{channel}</b>\n\n🎰 Введите любой никнейм игрока:", reply_markup=kb_cancel())
+        
+    # РЕЖИМ 3 (Авто-игра)
+    elif action == "chan3":
+        await state.clear()
+        global auto_task
+        if auto_task and not auto_task.done():
+            auto_task.cancel() # Останавливаем старый цикл, если был
+            
+        await cb.message.edit_text(f"🤖 <b>Авто-режим включен!</b>\nКанал: <b>{channel}</b>\n\nБот будет отправлять игру каждые 5 минут. Для остановки напишите /stop.")
+        
+        # Запускаем фоновый цикл
+        async def auto_loop():
+            while True:
+                nick = random.choice(AUTO_NICKNAMES)
+                try:
+                    await send_game_to_channel(cb.bot, channel, nick)
+                except Exception as e:
+                    logging.error(f"Ошибка в авто-игре: {e}")
+                await asyncio.sleep(300) # Ждем 5 минут (300 секунд)
+                
+        auto_task = asyncio.create_task(auto_loop())
     await cb.answer()
 
 # ═══════════════ РЕЖИМ 1: ЗАМЕНА ПОСТА ═══════════════
 @router.message(EditStates.m1_waiting_link)
 async def m1_process_link(msg: Message, state: FSMContext):
     if msg.from_user.id not in ADMIN_IDS: return
-
     match = re.search(r't\.me/(?:c/)?([a-zA-Z0-9_]+)/(\d+)', msg.text)
-    if not match:
-        return await msg.answer("❌ Неверный формат ссылки.")
+    if not match: return await msg.answer("❌ Неверный формат ссылки.")
 
     channel_from_link = match.group(1)
     message_id = int(match.group(2))
-    
-    if "t.me/c/" in msg.text:
-        chat_id = int(f"-100{channel_from_link}")
-    else:
-        chat_id = f"@{channel_from_link}"
+    chat_id = int(f"-100{channel_from_link}") if "t.me/c/" in msg.text else f"@{channel_from_link}"
 
     await state.update_data(chat_id=chat_id, message_id=message_id)
     await state.set_state(EditStates.m1_waiting_template)
-
     await msg.answer("📝 Выберите шаблон для замены:", reply_markup=kb_templates())
 
 @router.callback_query(EditStates.m1_waiting_template, F.data.startswith("tpl:"))
 async def m1_process_template(cb: CallbackQuery, state: FSMContext):
     if cb.from_user.id not in ADMIN_IDS: return
-
     template_id = cb.data.split(":")[1]
     tpl_data = TEMPLATES.get(template_id)
-    
     data = await state.get_data()
-    chat_id = data.get("chat_id")
-    message_id = data.get("message_id")
+    chat_id, message_id = data.get("chat_id"), data.get("message_id")
     
     channel_link = f"https://t.me/{chat_id.replace('@', '')}" if isinstance(chat_id, str) else f"https://t.me/c/{str(chat_id).replace('-100', '')}"
     final_text = f"{tpl_data['text']}\n\n👉 {channel_link}"
@@ -249,12 +315,8 @@ async def m1_process_template(cb: CallbackQuery, state: FSMContext):
     
     await state.clear()
     status_msg = await cb.message.edit_text("⏳ Обрабатываю...")
-
     try:
-        await cb.bot.edit_message_media(
-            chat_id=chat_id, message_id=message_id,
-            media=InputMediaPhoto(media=photo, caption=final_text, parse_mode="HTML")
-        )
+        await cb.bot.edit_message_media(chat_id=chat_id, message_id=message_id, media=InputMediaPhoto(media=photo, caption=final_text, parse_mode="HTML"))
         await status_msg.edit_text("✅ <b>Успешно! Сообщение отредактировано.</b>")
     except Exception:
         try:
@@ -264,76 +326,19 @@ async def m1_process_template(cb: CallbackQuery, state: FSMContext):
         except Exception as e2:
             await status_msg.edit_text(f"❌ Ошибка: {e2}")
 
-# ═══════════════ РЕЖИМ 2: МИНИ-ИГРА (КУБИК) ═══════════════
+# ═══════════════ РЕЖИМ 2: РУЧНАЯ ИГРА ═══════════════
 @router.message(EditStates.m2_waiting_nick)
 async def m2_process_nick_and_send(msg: Message, state: FSMContext):
     if msg.from_user.id not in ADMIN_IDS: return
-    
     nickname = msg.text
     data = await state.get_data()
     chat_id = data.get("chat_id") 
-    
     await state.clear()
+    
     status_msg = await msg.answer(f"⏳ Отправляю игру в канал {chat_id}...")
-
-    # 1. Генерируем ставку и режим
-    game_mode = random.choice(["Чётное", "Нечётное"])
-    dollars = random.randint(1, 5)
-    cents = random.randint(10, 99)
-    
-    # Переводим ставку в математический вид (float) для расчетов
-    bet_value = dollars + (cents / 100.0)
-    bet_amount_str = f"${dollars}.{cents:02d}"
-    
-    game_text = (
-        f"🎉 <b>Ваша ставка принята</b>\n"
-        f"🔑 Игрок: {nickname} (https://t.me/duckduckcasinobot)\n"
-        f"🚀 Режим: {game_mode}\n"
-        f"💸 Ставка: {bet_amount_str}"
-    )
-
     try:
-        # 2. Отправляем текст и анимированный кубик
-        await msg.bot.send_message(chat_id=chat_id, text=game_text, parse_mode="HTML", disable_web_page_preview=True)
-        
-        dice_msg = await msg.bot.send_dice(chat_id=chat_id, emoji="🎲")
-        dice_value = dice_msg.dice.value 
-        
-        # 3. Ждем 4 секунды, пока кубик крутится
-        await asyncio.sleep(4)
-
-        # 4. Определяем, четное ли выпало число
-        is_even = (dice_value % 2 == 0)
-        
-        # 5. Проверяем, выиграл ли игрок
-        if (game_mode == "Чётное" and is_even) or (game_mode == "Нечётное" and not is_even):
-            # Победа
-            win_value = bet_value * 1.5
-            win_amount_str = f"${win_value:.2f}"
-            
-            result_text = (
-                f"🎲 Выпало число: <b>{dice_value}</b>\n\n"
-                f"🎉 <b>ПОБЕДА!</b> 🏆\n\n"
-                f"🔑 Игрок: <b>{nickname}</b>\n"
-                f"💰 Выигрыш: <b>{win_amount_str}</b> (x1.5)\n"
-                f"💸 Ваша ставка: {bet_amount_str}"
-            )
-            await msg.bot.send_message(chat_id=chat_id, text=result_text, parse_mode="HTML")
-                
-        else:
-            # Поражение
-            result_text = (
-                f"🎲 Выпало число: <b>{dice_value}</b>\n\n"
-                f"😢 <b>ПОРАЖЕНИЕ.</b> 💔\n\n"
-                f"🔑 Игрок: <b>{nickname}</b>\n"
-                f"💸 Вы проиграли: <b>{bet_amount_str}</b>\n"
-                f"📉 Лимит исчерпан."
-            )
-            await msg.bot.send_message(chat_id=chat_id, text=result_text, parse_mode="HTML")
-
-        # 6. Отчитываемся тебе в личку
-        await status_msg.edit_text(f"✅ <b>Игра завершена!</b>\nВыпало: {dice_value}. Результат отправлен в канал.")
-
+        dice_val, nick = await send_game_to_channel(msg.bot, chat_id, nickname)
+        await status_msg.edit_text(f"✅ <b>Игра завершена!</b>\nИгрок: {nick}\nВыпало: {dice_val}.")
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка: {e}")
 
@@ -352,7 +357,7 @@ async def main() -> None:
     dp.include_router(router)
 
     log = logging.getLogger("edit_bot")
-    log.info("Бот-редактор (2 режима) запущен")
+    log.info("Бот-редактор (3 режима) запущен")
     try:
         await dp.start_polling(bot)
     finally:
