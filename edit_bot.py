@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import random
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -18,16 +19,12 @@ from aiogram.types import (
 )
 
 # ─────────────── НАСТРОЙКИ ───────────────
-# Токен берется из панели Bothost (переменная BOT_TOKEN)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ДЛЯ_ЛОКАЛЬНОГО_ТЕСТА")
-
-# ВПИШИ СЮДА СВОИ ID (без кавычек)
-ADMIN_IDS = [421440916] 
+ADMIN_IDS = [421440916] # ТВОЙ ID
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
 
-# ─────────────── ПУТИ ДЛЯ BOTHOST ───────────────
 DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
 IMG_DIR = os.path.join(DATA_DIR, "images")
 os.makedirs(IMG_DIR, exist_ok=True)
@@ -36,17 +33,19 @@ CHANNELS_FILE = os.path.join(DATA_DIR, "channels.json")
 router = Router()
 
 class EditStates(StatesGroup):
-    waiting_link = State()
-    waiting_template = State()
+    # Для режима 1
+    m1_waiting_link = State()
+    m1_waiting_template = State()
+    # Для режима 2
+    m2_waiting_nick = State()
+    m2_waiting_link = State()
 
-# ═══════════════ 3 ШАБЛОНА ═══════════════
 TEMPLATES = {
     "1": {"text": "coc mef and more drugs only here", "img": "img1.jpg"},
     "2": {"text": "best narcoshop", "img": "img2.jpg"},
     "3": {"text": "buy drugs only here", "img": "img3.jpg"}
 }
 
-# ═══════════════ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ═══════════════
 def get_channels():
     if os.path.exists(CHANNELS_FILE):
         try:
@@ -56,13 +55,19 @@ def get_channels():
             logging.error(f"Ошибка чтения channels.json: {e}")
     return []
 
-def kb_channels():
+# ═══════════════ КЛАВИАТУРЫ ═══════════════
+def kb_main_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📸 Режим 1: Фото + Текст", callback_data="mode:1")],
+        [InlineKeyboardButton(text="🎲 Режим 2: Мини-игра (Ставка)", callback_data="mode:2")]
+    ])
+
+def kb_channels(action_prefix):
     channels = get_channels()
     keyboard = []
     for i, ch in enumerate(channels):
-        # Обрезаем название кнопки, если ссылка слишком длинная
         btn_text = ch if len(ch) < 30 else ch[:27] + "..."
-        keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"chan:{i}")])
+        keyboard.append([InlineKeyboardButton(text=btn_text, callback_data=f"{action_prefix}:{i}")])
     
     if not keyboard:
         keyboard.append([InlineKeyboardButton(text="❌ Нет каналов в JSON", callback_data="none")])
@@ -77,6 +82,10 @@ def kb_templates():
         [InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel")]
     ])
 
+def kb_cancel():
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel")]])
+
+
 # ═══════════════ ХЕНДЛЕРЫ ═══════════════
 @router.message(CommandStart())
 async def cmd_start(msg: Message, state: FSMContext):
@@ -85,17 +94,35 @@ async def cmd_start(msg: Message, state: FSMContext):
     
     await state.clear()
     await msg.answer(
-        "🛠 <b>Панель управления каналами</b>\n\n"
-        "Выберите канал, в котором нужно отредактировать сообщение:",
-        reply_markup=kb_channels()
+        "🛠 <b>Главное меню</b>\n\n"
+        "Выберите режим работы:",
+        reply_markup=kb_main_menu()
     )
 
-@router.callback_query(F.data.startswith("chan:"))
-async def cb_channel(cb: CallbackQuery, state: FSMContext):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+# ─────────────── ВЫБОР РЕЖИМА ───────────────
+@router.callback_query(F.data.startswith("mode:"))
+async def cb_choose_mode(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+    
+    mode = cb.data.split(":")[1]
+    await state.update_data(mode=mode)
+    
+    action_prefix = "chan1" if mode == "1" else "chan2"
+    
+    await cb.message.edit_text(
+        f"📌 <b>Режим {mode}</b>\n\n"
+        "Выберите канал, в котором нужно отредактировать сообщение:",
+        reply_markup=kb_channels(action_prefix)
+    )
+    await cb.answer()
 
-    idx = int(cb.data.split(":", 1)[1])
+# ─────────────── ВЫБОР КАНАЛА ───────────────
+@router.callback_query(F.data.startswith("chan1:") | F.data.startswith("chan2:"))
+async def cb_channel(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
+
+    action, idx = cb.data.split(":")
+    idx = int(idx)
     channels = get_channels()
     
     if idx >= len(channels):
@@ -103,115 +130,150 @@ async def cb_channel(cb: CallbackQuery, state: FSMContext):
         
     channel = channels[idx]
     await state.update_data(channel_name=channel)
-    await state.set_state(EditStates.waiting_link)
     
-    await cb.message.edit_text(
-        f"📌 Выбран канал: <b>{channel}</b>\n\n"
-        "Отправьте ссылку на <b>сообщение</b> внутри этого канала.\n\n"
-        "Для публичных: <code>https://t.me/channel_2/123</code>\n"
-        "Для приватных: <code>https://t.me/c/123456789/123</code>",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✖️ Отмена", callback_data="cancel")]])
-    )
+    if action == "chan1":
+        await state.set_state(EditStates.m1_waiting_link)
+        await cb.message.edit_text(
+            f"📌 Канал: <b>{channel}</b>\n\n"
+            "Отправьте ссылку на <b>сообщение</b> (например: <code>https://t.me/c/123456789/12</code>):",
+            reply_markup=kb_cancel()
+        )
+    else:
+        await state.set_state(EditStates.m2_waiting_nick)
+        await cb.message.edit_text(
+            f"📌 Канал: <b>{channel}</b>\n\n"
+            "🎰 <b>Мини-игра</b>\n"
+            "Введите любой никнейм игрока:",
+            reply_markup=kb_cancel()
+        )
     await cb.answer()
 
-@router.message(EditStates.waiting_link)
-async def process_link(msg: Message, state: FSMContext):
-    if msg.from_user.id not in ADMIN_IDS:
-        return
+# ═══════════════ РЕЖИМ 1: ФОТО + ТЕКСТ ═══════════════
+@router.message(EditStates.m1_waiting_link)
+async def m1_process_link(msg: Message, state: FSMContext):
+    if msg.from_user.id not in ADMIN_IDS: return
 
     match = re.search(r't\.me/(?:c/)?([a-zA-Z0-9_]+)/(\d+)', msg.text)
     if not match:
-        return await msg.answer("❌ Неверный формат ссылки. Отправьте ссылку вида <code>https://t.me/channel/123</code>")
+        return await msg.answer("❌ Неверный формат ссылки.")
 
     channel_from_link = match.group(1)
     message_id = int(match.group(2))
     
     if "t.me/c/" in msg.text:
         chat_id = int(f"-100{channel_from_link}")
-        channel_link = f"https://t.me/c/{channel_from_link}"
     else:
         chat_id = f"@{channel_from_link}"
-        channel_link = f"https://t.me/{channel_from_link}"
 
-    await state.update_data(chat_id=chat_id, message_id=message_id, channel_link=channel_link)
-    await state.set_state(EditStates.waiting_template)
+    await state.update_data(chat_id=chat_id, message_id=message_id)
+    await state.set_state(EditStates.m1_waiting_template)
 
-    await msg.answer(
-        f"📝 Ссылка принята (ID сообщения: {message_id}).\n\n"
-        "Выберите шаблон для замены:",
-        reply_markup=kb_templates()
-    )
+    await msg.answer("📝 Выберите шаблон для замены:", reply_markup=kb_templates())
 
-@router.callback_query(EditStates.waiting_template, F.data.startswith("tpl:"))
-async def process_template(cb: CallbackQuery, state: FSMContext):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+@router.callback_query(EditStates.m1_waiting_template, F.data.startswith("tpl:"))
+async def m1_process_template(cb: CallbackQuery, state: FSMContext):
+    if cb.from_user.id not in ADMIN_IDS: return
 
     template_id = cb.data.split(":")[1]
     tpl_data = TEMPLATES.get(template_id)
     
-    if not tpl_data:
-        return await cb.message.edit_text("❌ Ошибка шаблона.")
-
     data = await state.get_data()
     chat_id = data.get("chat_id")
     message_id = data.get("message_id")
-    channel_link = data.get("channel_link")
     
+    # Ссылка на канал берется из данных, либо ставим заглушку
+    channel_link = f"https://t.me/{chat_id.replace('@', '')}" if isinstance(chat_id, str) else f"https://t.me/c/{str(chat_id).replace('-100', '')}"
     final_text = f"{tpl_data['text']}\n\n👉 {channel_link}"
     
     img_path = os.path.join(IMG_DIR, tpl_data['img'])
-    if not os.path.exists(img_path):
-        return await cb.message.edit_text(f"❌ Ошибка: Файл {tpl_data['img']} не найден.")
-        
     photo = FSInputFile(img_path)
     
     await state.clear()
-    status_msg = await cb.message.edit_text("⏳ Пытаюсь отредактировать сообщение...")
+    status_msg = await cb.message.edit_text("⏳ Обрабатываю...")
 
     try:
-        # Пытаемся заменить и фото, и текст (с сохранением ID)
         await cb.bot.edit_message_media(
-            chat_id=chat_id,
-            message_id=message_id,
-            media=InputMediaPhoto(
-                media=photo, 
-                caption=final_text,
-                parse_mode="HTML"
-            )
+            chat_id=chat_id, message_id=message_id,
+            media=InputMediaPhoto(media=photo, caption=final_text, parse_mode="HTML")
         )
-        await status_msg.edit_text("✅ <b>Успешно! Сообщение отредактировано (ID сохранился).</b>")
-        
+        await status_msg.edit_text("✅ <b>Успешно! Сообщение отредактировано.</b>")
     except Exception as e:
-        # Если не вышло (например, старое сообщение было текстом)
-        error_text = str(e)
-        await status_msg.edit_text(
-            f"⚠️ <b>Telegram запретил редактирование!</b>\n\n"
-            f"Текст ошибки:\n<code>{error_text}</code>\n\n"
-            f"<i>Удаляю старое и отправляю новое...</i>"
-        )
-        
         try:
             await cb.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            await cb.bot.send_photo(
-                chat_id=chat_id,
-                photo=photo,
-                caption=final_text,
-                parse_mode="HTML"
-            )
-            await status_msg.edit_text(
-                f"✅ <b>Старое сообщение удалено, отправлено новое.</b>\n\n"
-                f"(Причина, по которой не удалось отредактировать: <code>{error_text}</code>)"
-            )
+            await cb.bot.send_photo(chat_id=chat_id, photo=photo, caption=final_text, parse_mode="HTML")
+            await status_msg.edit_text("✅ <b>Старое удалено, отправлено новое.</b>")
         except Exception as e2:
-            await status_msg.edit_text(f"❌ Ошибка при удалении/отправке: {e2}")
+            await status_msg.edit_text(f"❌ Ошибка: {e2}")
 
+
+# ═══════════════ РЕЖИМ 2: МИНИ-ИГРА (КУБИК) ═══════════════
+@router.message(EditStates.m2_waiting_nick)
+async def m2_process_nick(msg: Message, state: FSMContext):
+    if msg.from_user.id not in ADMIN_IDS: return
+    
+    await state.update_data(nickname=msg.text)
+    await state.set_state(EditStates.m2_waiting_link)
+    await msg.answer("📝 Теперь отправьте ссылку на <b>сообщение</b> для замены:", reply_markup=kb_cancel())
+
+@router.message(EditStates.m2_waiting_link)
+async def m2_process_link(msg: Message, state: FSMContext):
+    if msg.from_user.id not in ADMIN_IDS: return
+
+    match = re.search(r't\.me/(?:c/)?([a-zA-Z0-9_]+)/(\d+)', msg.text)
+    if not match:
+        return await msg.answer("❌ Неверный формат ссылки.")
+
+    channel_from_link = match.group(1)
+    message_id = int(match.group(2))
+    
+    if "t.me/c/" in msg.text:
+        chat_id = int(f"-100{channel_from_link}")
+    else:
+        chat_id = f"@{channel_from_link}"
+
+    data = await state.get_data()
+    nickname = data.get("nickname")
+    await state.clear()
+    
+    status_msg = await msg.answer("⏳ Генерирую игру...")
+
+    # Логика генерации
+    # 1. Случайный режим для текста
+    game_mode = random.choice(["Чётное", "Нечётное"])
+    
+    # 2. Случайная ставка от 1 до 5 баксов с центами
+    dollars = random.randint(1, 5)
+    cents = random.randint(10, 99)
+    bet_amount = f"${dollars}.{cents}"
+    
+    # 3. Формируем текст
+    game_text = (
+        f"🎉 <b>Ваша ставка принята</b>\n"
+        f"🔑 Игрок: {nickname} (https://t.me/LudoCasino_bot?start=dXNlcl9pbmZvOjUyOTQz)\n"
+        f"🚀 Режим: {game_mode}\n"
+        f"💸 Ставка: {bet_amount}"
+    )
+
+    try:
+        # Удаляем старое сообщение
+        await msg.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        
+        # Отправляем текст со ставкой
+        await msg.bot.send_message(chat_id=chat_id, text=game_text, parse_mode="HTML", disable_web_page_preview=True)
+        
+        # Отправляем анимированный кубик
+        await msg.bot.send_dice(chat_id=chat_id, emoji="🎲")
+        
+        await status_msg.edit_text("✅ <b>Мини-игра успешно отправлена в канал!</b>")
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Ошибка: {e}")
+
+# ─────────────── ОТМЕНА ───────────────
 @router.callback_query(F.data == "cancel")
 async def cb_cancel(cb: CallbackQuery, state: FSMContext):
-    if cb.from_user.id not in ADMIN_IDS:
-        return
+    if cb.from_user.id not in ADMIN_IDS: return
     await state.clear()
-    await cb.message.edit_text("Отменено.", reply_markup=kb_channels())
+    await cb.message.edit_text("Отменено.", reply_markup=kb_main_menu())
     await cb.answer()
 
 async def main() -> None:
@@ -221,7 +283,7 @@ async def main() -> None:
     dp.include_router(router)
 
     log = logging.getLogger("edit_bot")
-    log.info("Бот-редактор запущен")
+    log.info("Бот-редактор (2 режима) запущен")
     try:
         await dp.start_polling(bot)
     finally:
