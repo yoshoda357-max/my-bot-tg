@@ -109,7 +109,7 @@ async def cmd_start(msg: Message, state: FSMContext):
         )
         try:
             # Пытаемся отправить картинку main.jpg (загрузи её в папку images)
-            photo = FSInputFile(os.path.join(IMG_DIR, "main.jpg"))
+            photo = FSInputFile(os.path.join(IMG_DIR, "free.jpg"))
             await msg.answer_photo(photo=photo, caption=bonus_text, reply_markup=kb_user_start())
         except Exception:
             # Если картинки нет, отправляем просто текст
