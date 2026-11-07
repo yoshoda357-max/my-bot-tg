@@ -112,7 +112,7 @@ async def cmd_start(msg: Message, state: FSMContext):
             "Вы получили 3$ (187⭐️) бонусного баланса!"
         )
         try:
-            photo = FSInputFile(os.path.join(IMG_DIR, "main.jpg"))
+            photo = FSInputFile(os.path.join(IMG_DIR, "free.jpg"))
             await msg.answer_photo(photo=photo, caption=bonus_text, reply_markup=kb_user_start())
         except Exception:
             await msg.answer(bonus_text, reply_markup=kb_user_start())
