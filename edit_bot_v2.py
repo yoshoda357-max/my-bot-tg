@@ -21,16 +21,17 @@ from aiogram.types import (
 
 # ─────────────── НАСТРОЙКИ ───────────────
 BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ДЛЯ_ЛОКАЛЬНОГО_ТЕСТА")
-ADMIN_IDS = [421440916] # ТВОЙ ID
+ADMIN_IDS = [421440916] # ЗАМЕНИ НА СВОЙ ID (без кавычек)
 
 # НАСТРОЙКИ ДЛЯ ЮЗЕРОВ (ЗАГЛУШКА)
-CHECK_CHANNEL_ID = "@duckduckcasino" # Юзернейм канала для проверки подписки (бот должен быть там!)
+CHECK_CHANNEL_ID = "@duckduckcasino" # Юзернейм канала для проверки подписки
 CHECK_CHANNEL_URL = "https://t.me/duckduckcasino" 
 CASINO_BOT_URL = "https://t.me/duckduckcasinobot" 
 
 if sys.platform == "win32":
     sys.stdout.reconfigure(encoding='utf-8')
 
+# ─────────────── ПУТИ ДЛЯ BOTHOST ───────────────
 DATA_DIR = "/app/data" if os.path.exists("/app/data") else "."
 IMG_DIR = os.path.join(DATA_DIR, "images")
 os.makedirs(IMG_DIR, exist_ok=True)
@@ -102,8 +103,8 @@ def kb_user_subscribe():
 # ═══════════════ СТАРТ ═══════════════
 @router.message(CommandStart())
 async def cmd_start(msg: Message, state: FSMContext):
-    # ЭТА СТРОЧКА ПОМОЖЕТ ПОНЯТЬ, ЧТО КОД ОБНОВИЛСЯ
-    print(f"[{time.ctime()}] БОТ ЗАПУЩЕН С НОВЫМ КОДОМ (РЕЖИМ 1 И 2)!")
+    # Отладочный вывод для проверки обновления на хостинге
+    print(f"[{time.ctime()}] БОТ ЗАПУЩЕН С НОВЫМ КОДОМ!")
     
     if msg.from_user.id not in ADMIN_IDS:
         bonus_text = (
@@ -275,22 +276,64 @@ async def m2_process_nick_and_send(msg: Message, state: FSMContext):
     await state.clear()
     status_msg = await msg.answer(f"⏳ Отправляю игру в канал {chat_id}...")
 
+    # 1. Генерируем ставку и режим
     game_mode = random.choice(["Чётное", "Нечётное"])
     dollars = random.randint(1, 5)
     cents = random.randint(10, 99)
-    bet_amount = f"${dollars}.{cents}"
+    
+    # Переводим ставку в математический вид (float) для расчетов
+    bet_value = dollars + (cents / 100.0)
+    bet_amount_str = f"${dollars}.{cents:02d}"
     
     game_text = (
         f"🎉 <b>Ваша ставка принята</b>\n"
         f"🔑 Игрок: {nickname} (https://t.me/duckduckcasinobot)\n"
         f"🚀 Режим: {game_mode}\n"
-        f"💸 Ставка: {bet_amount}"
+        f"💸 Ставка: {bet_amount_str}"
     )
 
     try:
+        # 2. Отправляем текст и анимированный кубик
         await msg.bot.send_message(chat_id=chat_id, text=game_text, parse_mode="HTML", disable_web_page_preview=True)
-        await msg.bot.send_dice(chat_id=chat_id, emoji="🎲")
-        await status_msg.edit_text(f"✅ <b>Игра успешно отправлена в {chat_id}!</b>")
+        
+        dice_msg = await msg.bot.send_dice(chat_id=chat_id, emoji="🎲")
+        dice_value = dice_msg.dice.value 
+        
+        # 3. Ждем 4 секунды, пока кубик крутится
+        await asyncio.sleep(4)
+
+        # 4. Определяем, четное ли выпало число
+        is_even = (dice_value % 2 == 0)
+        
+        # 5. Проверяем, выиграл ли игрок
+        if (game_mode == "Чётное" and is_even) or (game_mode == "Нечётное" and not is_even):
+            # Победа
+            win_value = bet_value * 1.5
+            win_amount_str = f"${win_value:.2f}"
+            
+            result_text = (
+                f"🎲 Выпало число: <b>{dice_value}</b>\n\n"
+                f"🎉 <b>ПОБЕДА!</b> 🏆\n\n"
+                f"🔑 Игрок: <b>{nickname}</b>\n"
+                f"💰 Выигрыш: <b>{win_amount_str}</b> (x1.5)\n"
+                f"💸 Ваша ставка: {bet_amount_str}"
+            )
+            await msg.bot.send_message(chat_id=chat_id, text=result_text, parse_mode="HTML")
+                
+        else:
+            # Поражение
+            result_text = (
+                f"🎲 Выпало число: <b>{dice_value}</b>\n\n"
+                f"😢 <b>ПОРАЖЕНИЕ.</b> 💔\n\n"
+                f"🔑 Игрок: <b>{nickname}</b>\n"
+                f"💸 Вы проиграли: <b>{bet_amount_str}</b>\n"
+                f"📉 Лимит исчерпан."
+            )
+            await msg.bot.send_message(chat_id=chat_id, text=result_text, parse_mode="HTML")
+
+        # 6. Отчитываемся тебе в личку
+        await status_msg.edit_text(f"✅ <b>Игра завершена!</b>\nВыпало: {dice_value}. Результат отправлен в канал.")
+
     except Exception as e:
         await status_msg.edit_text(f"❌ Ошибка: {e}")
 
